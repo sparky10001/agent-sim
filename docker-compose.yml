@@ -1,0 +1,11 @@
+version: "3.8"
+
+services:
+  agent-sim:
+    build: .
+    container_name: agent-sim
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./runs:/app/runs
