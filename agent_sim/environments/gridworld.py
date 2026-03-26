@@ -8,7 +8,7 @@ class GridWorld:
         self.state = None
 
     def reset(self):
-        """Reset environment to initial state"""
+        """Reset environment to deterministic initial state"""
         self.state = {
             "x": 0,
             "y": 0,
