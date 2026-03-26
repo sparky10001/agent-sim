@@ -1,4 +1,4 @@
-version: "3.8"
+# docker/docker-compose.yml
 
 services:
   agent-sim:
