@@ -6,6 +6,8 @@ services:
     container_name: agent-sim
     ports:
       - "8000:8000"
+    environment:
+      - LOG_DIR=/app/logs/runs  
     volumes:
-      - ./logs:/app/logs
-      - ./runs:/app/runs
+      - ~/agent-sim/runs:/app/runs
+      - ~/agent-sim/logs:/app/logs

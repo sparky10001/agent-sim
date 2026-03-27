@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 
-LOG_DIR = os.path.expanduser("~/agent-sim/logs/runs")
+LOG_DIR = os.environ.get("LOG_DIR", "/app/logs/runs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 class ReplayLogger:
