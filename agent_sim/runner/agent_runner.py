@@ -1,59 +1,64 @@
-import os
 import requests
 import random
-import time
+import os
 
 BASE_URL = "http://localhost:8000/v1"
 ACTIONS = ["up", "down", "left", "right"]
 
-# Policy selection via environment variable
-POLICY = os.environ.get("POLICY", "random")
-
+# -------------------- POLICIES --------------------
 
 def random_policy(state):
-    """Randomly pick an action."""
     return random.choice(ACTIONS)
 
 
 def greedy_policy(state):
-    """Move toward the goal deterministically."""
     x, y = state["x"], state["y"]
-    goal_x, goal_y = state["goal"]
 
-    if x < goal_x:
-        return "right"
-    elif x > goal_x:
-        return "left"
-    elif y < goal_y:
-        return "up"
-    elif y > goal_y:
-        return "down"
+    goal = state["goal"]
+    if isinstance(goal, dict):
+        goal_x, goal_y = goal["x"], goal["y"]
+    else:
+        goal_x, goal_y = goal
 
-    # fallback (already at goal)
-    return random.choice(ACTIONS)
+    dx = goal_x - x
+    dy = goal_y - y
 
-
-def select_action(state):
-    """Select action based on chosen policy."""
-    if POLICY == "greedy":
-        return greedy_policy(state)
-    return random_policy(state)
+    # Bulletproof: prioritize largest distance axis
+    if abs(dx) > abs(dy):
+        return "right" if dx > 0 else "left"
+    else:
+        return "down" if dy > 0 else "up"
 
 
-def run_episode(max_steps=50, delay=0):
-    """Run a single episode."""
+def epsilon_greedy_policy(state, epsilon=0.1):
+    if random.random() < epsilon:
+        return random_policy(state)
+    return greedy_policy(state)
+
+
+def get_policy():
+    policy_name = os.environ.get("POLICY", "random").lower()
+
+    if policy_name == "greedy":
+        return greedy_policy, "greedy"
+    elif policy_name == "epsilon":
+        epsilon = float(os.environ.get("EPSILON", 0.1))
+        return lambda s: epsilon_greedy_policy(s, epsilon), f"epsilon-greedy (ε={epsilon})"
+    else:
+        return random_policy, "random"
+
+# -------------------- RUNNER --------------------
+
+def run_episode(policy, max_steps=50):
     res = requests.post(f"{BASE_URL}/reset")
     state = res.json()["state"]
 
     total_reward = 0
 
     for step in range(max_steps):
-        action = select_action(state)
+        action = policy(state)
 
-        res = requests.post(
-            f"{BASE_URL}/step",
-            json={"action": action}
-        )
+        res = requests.post(f"{BASE_URL}/step", json={"action": action})
         data = res.json()
 
         state = data["state"]
@@ -62,40 +67,35 @@ def run_episode(max_steps=50, delay=0):
 
         total_reward += reward
 
-        if delay:
-            time.sleep(delay)
-
         if done:
-            break
+            return total_reward, step + 1
 
-    return total_reward, step + 1
+    return total_reward, max_steps
 
 
-def run_experiments(num_episodes=10, max_steps=50, delay=0):
-    """Run multiple episodes and report metrics."""
-    print(f"Running policy: {POLICY}")
+def run_experiments(num_episodes=10, max_steps=50):
+    policy, policy_name = get_policy()
+    print(f"Running policy: {policy_name}")
+
     results = []
 
     for ep in range(num_episodes):
-        total_reward, steps = run_episode(max_steps=max_steps, delay=delay)
-        print(f"Episode {ep+1}: reward={total_reward}, steps={steps}")
-        results.append((total_reward, steps))
+        reward, steps = run_episode(policy, max_steps)
+        results.append((reward, steps))
+        print(f"Episode {ep+1}: reward={reward}, steps={steps}")
 
-    # Metrics
+    # Summary
+    total_rewards = sum(r for r, _ in results)
     successes = sum(1 for r, _ in results if r > 0)
-    success_rate = successes / len(results)
-
-    avg_reward = sum(r for r, _ in results) / len(results)
-    avg_steps = sum(s for _, s in results) / len(results)
+    avg_reward = total_rewards / num_episodes
+    avg_steps = sum(s for _, s in results) / num_episodes
 
     print("\n===== RUN SUMMARY =====")
-    print(f"Episodes: {len(results)}")
-    print(f"Success Rate: {success_rate:.2f}")
+    print(f"Episodes: {num_episodes}")
+    print(f"Success Rate: {successes / num_episodes:.2f}")
     print(f"Avg Reward: {avg_reward:.2f}")
     print(f"Avg Steps: {avg_steps:.2f}")
 
-    return results
-
 
 if __name__ == "__main__":
-    run_experiments(num_episodes=10, max_steps=50, delay=0)
+    run_experiments()
