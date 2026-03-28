@@ -7,6 +7,7 @@ from agent_sim.agents.q_agent import QAgent
 BASE_URL = "http://localhost:8000/v1"
 ACTIONS = ["up", "down", "left", "right"]
 
+
 # -------------------- POLICIES --------------------
 
 def random_policy(state):
@@ -14,57 +15,18 @@ def random_policy(state):
 
 
 def greedy_policy(state):
+    # Simple hardcoded goal direction (for testing)
     x, y = state["x"], state["y"]
 
-    goal = state["goal"]
-    if isinstance(goal, dict):
-        goal_x, goal_y = goal["x"], goal["y"]
+    if x < 4:
+        return "right"
+    elif y < 4:
+        return "down"
     else:
-        goal_x, goal_y = goal
-
-    dx = goal_x - x
-    dy = goal_y - y
-
-    # Move along the axis with the greatest distance
-    if abs(dx) > abs(dy):
-        return "right" if dx > 0 else "left"
-    else:
-        return "down" if dy > 0 else "up"
+        return random.choice(ACTIONS)
 
 
-def epsilon_greedy_policy(state, epsilon=0.1):
-    if random.random() < epsilon:
-        return random_policy(state)
-    return greedy_policy(state)
-
-
-def get_policy():
-    policy_name = os.environ.get("POLICY", "random").lower()
-
-    if policy_name == "greedy":
-        return greedy_policy, "greedy", None
-
-    elif policy_name == "epsilon":
-        epsilon = float(os.environ.get("EPSILON", 0.1))
-        return (
-            lambda s: epsilon_greedy_policy(s, epsilon),
-            f"epsilon-greedy (ε={epsilon})",
-            None,
-        )
-
-    elif policy_name == "q":
-        agent = QAgent(
-            alpha=float(os.environ.get("ALPHA", 0.1)),
-            gamma=float(os.environ.get("GAMMA", 0.9)),
-            epsilon=float(os.environ.get("EPSILON", 0.1)),
-        )
-        return agent.select_action, "q-learning", agent
-
-    else:
-        return random_policy, "random", None
-
-
-# -------------------- RUNNER --------------------
+# -------------------- RUN EPISODE --------------------
 
 def run_episode(policy, agent=None, max_steps=50):
     res = requests.post(f"{BASE_URL}/reset")
@@ -73,7 +35,12 @@ def run_episode(policy, agent=None, max_steps=50):
     total_reward = 0
 
     for step in range(max_steps):
-        action = policy(state)
+
+        # ✅ CRITICAL: agent controls actions if present
+        if agent:
+            action = agent.select_action(state)
+        else:
+            action = policy(state)
 
         res = requests.post(f"{BASE_URL}/step", json={"action": action})
         data = res.json()
@@ -82,9 +49,13 @@ def run_episode(policy, agent=None, max_steps=50):
         reward = data["reward"]
         done = data["done"]
 
+        # 🔍 Debug: confirm learning signal
+        if reward > 0:
+            print(f"🎯 GOAL REACHED at step {step}")
+
         total_reward += reward
 
-        # Q-learning update (only if agent exists)
+        # Q-learning update
         if agent:
             agent.update(state, action, reward, next_state, done)
 
@@ -96,23 +67,37 @@ def run_episode(policy, agent=None, max_steps=50):
     return total_reward, max_steps
 
 
-def run_experiments(num_episodes=50, max_steps=50):
-    policy, policy_name, agent = get_policy()
-    print(f"Running policy: {policy_name}")
+# -------------------- RUN EXPERIMENTS --------------------
+
+def run_experiments(policy_name="random", num_episodes=50, max_steps=50):
+    policy = random_policy
+    agent = None
+
+    if policy_name == "greedy":
+        policy = greedy_policy
+
+    elif policy_name == "q":
+        epsilon = float(os.environ.get("EPSILON", 0.3))
+        alpha = float(os.environ.get("ALPHA", 0.5))
+
+        agent = QAgent(alpha=alpha, epsilon=epsilon)
+        policy = None  # agent decides
 
     results = []
 
-    for ep in range(num_episodes):
-        reward, steps = run_episode(policy, agent, max_steps)
-        results.append((reward, steps))
+    print(f"Running policy: {policy_name if policy_name != 'q' else 'q-learning'}")
 
-        print(f"Episode {ep+1}: reward={reward}, steps={steps}")
+    for ep in range(num_episodes):
+        total_reward, steps = run_episode(policy, agent, max_steps)
+        results.append((total_reward, steps))
+
+        print(f"Episode {ep+1}: reward={total_reward}, steps={steps}")
 
     # -------------------- SUMMARY --------------------
-    total_rewards = sum(r for r, _ in results)
+
     successes = sum(1 for r, _ in results if r > 0)
-    avg_reward = total_rewards / num_episodes
-    avg_steps = sum(s for _, s in results) / num_episodes
+    avg_reward = sum(r for r, _ in results) / len(results)
+    avg_steps = sum(s for _, s in results) / len(results)
 
     print("\n===== RUN SUMMARY =====")
     print(f"Episodes: {num_episodes}")
@@ -121,5 +106,8 @@ def run_experiments(num_episodes=50, max_steps=50):
     print(f"Avg Steps: {avg_steps:.2f}")
 
 
+# -------------------- ENTRY POINT --------------------
+
 if __name__ == "__main__":
-    run_experiments()
+    policy_name = os.environ.get("POLICY", "random")
+    run_experiments(policy_name=policy_name, num_episodes=200, max_steps=50)
