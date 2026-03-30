@@ -1,13 +1,30 @@
-# docker/docker-compose.yml
+version: "3.9"
 
 services:
-  agent-sim:
-    build: .
-    container_name: agent-sim
+  # 🌐 Environment API (Flask)
+  env:
+    build:
+      context: .
+      dockerfile: Dockerfile.env
+    container_name: agent_env
     ports:
       - "8000:8000"
-    environment:
-      - LOG_DIR=/app/logs/runs  
     volumes:
-      - ~/agent-sim/runs:/app/runs
       - ~/agent-sim/logs:/app/logs
+      - ~/agent-sim/runs:/app/runs
+
+  # 🧠 Agent Runner (training)
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: agent_runner
+    depends_on:
+      - env
+    environment:
+      - ENV_MODE=remote
+      - BASE_URL=http://env:8000/v1
+      - LOG_DIR=/app/logs/runs
+    volumes:
+      - ~/agent-sim/logs:/app/logs
+      - ~/agent-sim/runs:/app/runs

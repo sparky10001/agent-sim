@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY . .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Default to remote mode inside Docker
+ENV ENV_MODE=remote
+ENV BASE_URL=http://env:8000/v1
+
+CMD ["python", "-m", "orchestration.agent_runner"]
