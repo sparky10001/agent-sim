@@ -7,6 +7,13 @@ app = Flask(__name__)
 env = GridWorld()
 logger = ReplayLogger()
 
+@app.route("/v1/health", methods=["GET"])
+def health():
+    return jsonify({
+        "status": "ok"
+    })
+
+
 @app.route("/v1/reset", methods=["POST"])
 def reset():
     state = env.reset()
@@ -17,6 +24,7 @@ def reset():
     return jsonify({
         "state": state
     })
+
 
 @app.route("/v1/step", methods=["POST"])
 def step():
@@ -31,6 +39,7 @@ def step():
         "reward": reward,
         "done": done
     })
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
