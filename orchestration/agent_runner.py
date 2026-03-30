@@ -1,6 +1,7 @@
 import os
 import random
 import socket
+import time
 import requests
 
 from agents.q_agent import QAgent
@@ -14,6 +15,10 @@ ACTIONS = ["up", "down", "left", "right"]
 DEFAULT_BASE_URL = "http://localhost:8000/v1"
 REMOTE_TIMEOUT = 2  # seconds
 ENABLE_FALLBACK = True  # fallback to LocalEnv if remote fails
+
+# Retry config (NEW)
+ENV_RETRIES = int(os.environ.get("ENV_RETRIES", 10))
+ENV_RETRY_DELAY = float(os.environ.get("ENV_RETRY_DELAY", 1.0))
 
 
 # -------------------- ENV FACTORY --------------------
@@ -29,6 +34,7 @@ def create_env():
     Robust features:
         - Validation of required config
         - Health check for remote env
+        - Retry logic (Docker-safe)
         - Optional fallback to LocalEnv
         - Detailed logging
     """
@@ -49,25 +55,32 @@ def create_env():
 
         print(f"🌐 Attempting RemoteEnv: {base_url}")
 
-        # Health check
-        try:
-            health_url = base_url.rstrip("/") + "/health"
-            response = requests.get(health_url, timeout=REMOTE_TIMEOUT)
+        health_url = base_url.rstrip("/") + "/health"
 
-            if response.status_code == 200:
-                print("✅ Remote environment reachable")
-                return RemoteEnv(base_url=base_url)
-            else:
-                raise RuntimeError(f"Health check failed: {response.status_code}")
+        for attempt in range(1, ENV_RETRIES + 1):
+            try:
+                response = requests.get(health_url, timeout=REMOTE_TIMEOUT)
 
-        except Exception as e:
-            print(f"⚠️ Remote environment check failed: {e}")
+                if response.status_code == 200:
+                    print("✅ Remote environment reachable")
+                    return RemoteEnv(base_url=base_url)
+                else:
+                    raise RuntimeError(f"Health check failed: {response.status_code}")
 
-            if ENABLE_FALLBACK:
-                print("🔁 Falling back to LocalEnv")
-                return LocalEnv()
-            else:
-                raise RuntimeError(f"❌ Remote env unreachable: {e}")
+            except Exception as e:
+                print(f"⏳ Retry {attempt}/{ENV_RETRIES} failed: {e}")
+
+                if attempt < ENV_RETRIES:
+                    time.sleep(ENV_RETRY_DELAY)
+
+        # -------------------- FALLBACK --------------------
+        print("⚠️ Remote environment unavailable after retries")
+
+        if ENABLE_FALLBACK:
+            print("🔁 Falling back to LocalEnv")
+            return LocalEnv()
+        else:
+            raise RuntimeError("❌ Remote env unreachable after retries")
 
     # -------------------- LOCAL MODE --------------------
     print("⚡ Using LocalEnv")
