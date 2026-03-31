@@ -1,9 +1,7 @@
 # agent-sim
 The protocol is the contract. Everything else is replaceable.
 
-```
-
-```
+``````
 agent-sim
 ├─ agents
 │  ├─ q_agent.py
