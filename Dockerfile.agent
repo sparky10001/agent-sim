@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV ENV_MODE=remote
 ENV BASE_URL=http://env:8000/v1
 
-CMD ["python", "-m", "orchestration.agent_runner"]
+CMD ["python", "-m", "runners.agent_runner"]
