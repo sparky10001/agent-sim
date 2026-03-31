@@ -1,7 +1,6 @@
-version: "3.9"
+# version: "3.9"
 
 services:
-  # 🌐 Environment API (Flask)
   env:
     build:
       context: .
@@ -10,10 +9,16 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ~/agent-sim/logs:/app/logs
-      - ~/agent-sim/runs:/app/runs
+      - logs:/app/logs
+      - runs:/app/runs
 
-  # 🧠 Agent Runner (training)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
+
   agent:
     build:
       context: .
@@ -26,5 +31,9 @@ services:
       - BASE_URL=http://env:8000/v1
       - LOG_DIR=/app/logs/runs
     volumes:
-      - ~/agent-sim/logs:/app/logs
-      - ~/agent-sim/runs:/app/runs
+      - logs:/app/logs
+      - runs:/app/runs
+
+volumes:
+  logs:
+  runs:
