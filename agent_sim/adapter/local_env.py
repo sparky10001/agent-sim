@@ -1,5 +1,5 @@
 from agent_sim.environments.gridworld import GridWorld
-from agent_sim.adapter.env import to_observation
+from agent_sim.protocol.env import to_observation
 from .env_interface import EnvInterface
 
 class LocalEnv(EnvInterface):

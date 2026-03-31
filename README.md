@@ -1,21 +1,22 @@
 # agent-sim
 The protocol is the contract. Everything else is replaceable.
 
-``````
+```
 agent-sim
 ├─ agents
 │  ├─ q_agent.py
 │  └─ __init__.py
 ├─ agent_sim
 │  ├─ adapter
-│  │  ├─ env.py
 │  │  ├─ env_interface.py
 │  │  ├─ local_env.py
 │  │  ├─ remote_env.py
-│  │  ├─ server.py
 │  │  └─ __init__.py
 │  ├─ environments
 │  │  ├─ gridworld.py
+│  │  └─ __init__.py
+│  ├─ protocol
+│  │  ├─ env.py
 │  │  └─ __init__.py
 │  ├─ replay
 │  │  ├─ loader.py
@@ -23,7 +24,11 @@ agent-sim
 │  │  ├─ replay.py
 │  │  ├─ summarize.py
 │  │  └─ __init__.py
-│  ├─ runner
+│  ├─ server
+│  │  ├─ server.py
+│  │  └─ __init__.py
+│  ├─ validation
+│  │  ├─ protocol_validator.py
 │  │  └─ __init__.py
 │  └─ __init__.py
 ├─ config
@@ -37,10 +42,10 @@ agent-sim
 ├─ Dockerfile.env
 ├─ evals
 ├─ LICENSE
-├─ orchestration
-│  └─ agent_runner.py
 ├─ README.md
 ├─ requirements.txt
+├─ runners
+│  └─ agent_runner.py
 └─ services
    └─ llm_client.py
 
