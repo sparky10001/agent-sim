@@ -2,6 +2,8 @@
 The protocol is the contract. Everything else is replaceable.
 
 ```
+
+```
 agent-sim
 ├─ agents
 │  ├─ q_agent.py
@@ -33,6 +35,8 @@ agent-sim
 │  └─ vm3
 ├─ docker-compose.yml
 ├─ Dockerfile
+├─ Dockerfile.agent
+├─ Dockerfile.env
 ├─ evals
 ├─ LICENSE
 ├─ orchestration
