@@ -1,10 +1,9 @@
 import os
 import time
+from typing import Optional
 import requests
-from typing import Any, Dict
 
-from agent_sim.protocol.env import to_observation, validate_state
-
+from agent_sim.protocol.env import validate_action
 
 # -------------------- CONFIG --------------------
 
@@ -12,7 +11,6 @@ DEFAULT_BASE_URL = "http://localhost:8000/v1"
 TIMEOUT = float(os.environ.get("VALIDATOR_TIMEOUT", 2.0))
 RETRIES = int(os.environ.get("VALIDATOR_RETRIES", 3))
 RETRY_DELAY = float(os.environ.get("VALIDATOR_RETRY_DELAY", 0.5))
-
 VALIDATE_DETERMINISM = os.environ.get("VALIDATE_DETERMINISM", "false").lower() == "true"
 
 
@@ -24,11 +22,10 @@ class RequestHelper:
 
     def _request(self, method: str, path: str, **kwargs):
         url = f"{self.base_url}{path}"
-
         for attempt in range(1, RETRIES + 1):
             try:
-                response = requests.request(method, url, timeout=TIMEOUT, **kwargs)
-                return response
+                resp = requests.request(method, url, timeout=TIMEOUT, **kwargs)
+                return resp
             except Exception as e:
                 if attempt < RETRIES:
                     print(f"⏳ Retry {attempt}/{RETRIES} failed for {path}: {e}")
@@ -39,8 +36,8 @@ class RequestHelper:
     def get(self, path: str):
         return self._request("GET", path)
 
-    def post(self, path: str, **kwargs):
-        return self._request("POST", path, **kwargs)
+    def post(self, path: str, json: Optional[dict] = None):
+        return self._request("POST", path, json=json)
 
 
 # -------------------- VALIDATOR --------------------
@@ -53,7 +50,9 @@ class ProtocolValidator:
     def check_health(self):
         print("🔍 Checking /health...")
         r = self.client.get("/health")
-        assert r.status_code == 200, "❌ Health check failed"
+        assert r.status_code == 200, "❌ Health endpoint failed"
+        data = r.json()
+        assert data.get("status") == "ok", "❌ Health check failed"
 
     # ---------- RESET ----------
     def check_reset(self):
@@ -62,46 +61,83 @@ class ProtocolValidator:
         assert r.status_code == 200, "❌ Reset failed"
 
         data = r.json()
-        assert "state" in data, "❌ Missing 'state' in reset response"
+        assert "session_id" in data, "❌ Missing session_id"
+        assert "state" in data, "❌ Missing state"
 
-        state = to_observation(data["state"])
-        validate_state(state)
+        return data["session_id"], data["state"]
 
     # ---------- STEP ----------
-    def check_step(self):
+    def check_step(self, session_id: Optional[str] = None):
         print("🔍 Checking /step...")
 
-        r = self.client.post("/reset")
-        state = r.json()["state"]
+        if not session_id:
+            session_id, _ = self.check_reset()
+
+        prev_state = None
 
         for action in ["up", "down", "left", "right"]:
-            r = self.client.post("/step", json={"action": action})
-            assert r.status_code == 200, f"❌ Step failed for action {action}"
+            validate_action(action)
+
+            r = self.client.post("/step", json={
+                "session_id": session_id,
+                "action": action
+            })
 
             data = r.json()
 
-            # Required fields
+            assert r.status_code == 200, f"❌ Step failed: {data}"
+
             for key in ["state", "reward", "done"]:
-                assert key in data, f"❌ Missing '{key}' in step response"
+                assert key in data, f"❌ Missing '{key}'"
 
-            # Type validation
-            assert isinstance(data["reward"], (int, float)), "❌ reward must be numeric"
-            assert isinstance(data["done"], bool), "❌ done must be boolean"
+            # Check progression (basic sanity)
+            if prev_state:
+                assert data["state"] != prev_state or data["done"], \
+                    "❌ State did not change between steps"
 
-            # State validation
-            state = to_observation(data["state"])
-            validate_state(state)
+            prev_state = data["state"]
 
     # ---------- INVALID ACTION ----------
     def check_invalid_action(self):
         print("🔍 Checking invalid action handling...")
 
-        r = self.client.post("/step", json={"action": "INVALID_ACTION"})
+        session_id, _ = self.check_reset()
 
-        assert r.status_code in (400, 422), (
-            "❌ Invalid action was not rejected properly "
-            f"(status={r.status_code})"
-        )
+        r = self.client.post("/step", json={
+            "session_id": session_id,
+            "action": "INVALID"
+        })
+
+        assert r.status_code == 400, "❌ Invalid action not rejected"
+
+        data = r.json()
+        assert "error" in data, "❌ Missing error response"
+
+    # ---------- SESSION FLOW ----------
+    def check_session_flow(self):
+        print("🔍 Checking session lifecycle...")
+
+        # Step without reset
+        r = self.client.post("/step", json={"action": "up"})
+        assert r.status_code == 400, "❌ Step without session should fail"
+
+        # Step after done (simulate)
+        session_id, _ = self.check_reset()
+
+        for _ in range(200):  # force termination
+            r = self.client.post("/step", json={
+                "session_id": session_id,
+                "action": "up"
+            })
+            if r.json().get("done"):
+                break
+
+        r = self.client.post("/step", json={
+            "session_id": session_id,
+            "action": "up"
+        })
+
+        assert r.status_code == 400, "❌ Step after done should fail"
 
     # ---------- DETERMINISM ----------
     def check_determinism(self):
@@ -110,22 +146,20 @@ class ProtocolValidator:
 
         print("🔍 Checking determinism...")
 
-        r1 = self.client.post("/reset")
-        r2 = self.client.post("/reset")
+        _, s1 = self.check_reset()
+        _, s2 = self.check_reset()
 
-        s1 = r1.json()["state"]
-        s2 = r2.json()["state"]
-
-        assert s1 == s2, "❌ Environment reset is not deterministic"
+        assert s1 == s2, "❌ Initial states differ (non-deterministic reset)"
 
     # ---------- RUN ALL ----------
     def run_all(self):
         print("\n🧪 Running Protocol Validation Suite...\n")
 
         self.check_health()
-        self.check_reset()
-        self.check_step()
+        session_id, _ = self.check_reset()
+        self.check_step(session_id)
         self.check_invalid_action()
+        self.check_session_flow()
         self.check_determinism()
 
         print("\n✅ Protocol validation PASSED\n")
@@ -135,7 +169,6 @@ class ProtocolValidator:
 
 if __name__ == "__main__":
     base_url = os.environ.get("BASE_URL", DEFAULT_BASE_URL)
-
     print(f"🌐 Validator targeting: {base_url}")
 
     validator = ProtocolValidator(base_url)

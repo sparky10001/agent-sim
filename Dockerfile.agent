@@ -2,12 +2,31 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY . .
+# -------------------- SYSTEM DEPS --------------------
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
+# -------------------- PYTHON OPTIMIZATION --------------------
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# -------------------- INSTALL DEPENDENCIES --------------------
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Default to remote mode inside Docker
-ENV ENV_MODE=remote
-ENV BASE_URL=http://env:8000/v1
+# -------------------- COPY APP --------------------
+COPY . .
 
-CMD ["python", "-m", "runners.agent_runner"]
+# -------------------- SECURITY --------------------
+RUN useradd -m appuser
+USER appuser
+
+# -------------------- DEFAULT ENV (can be overridden) --------------------
+ENV ENV_MODE=remote
+ENV BASE_URLS=http://env1:8000/v1,http://env2:8000/v1
+ENV LOG_DIR=/app/logs/runs
+ENV VALIDATE_DETERMINISM=true
+
+# -------------------- ENTRYPOINT --------------------
+CMD ["python", "-m", "runners.cli"]

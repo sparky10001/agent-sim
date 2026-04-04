@@ -1,17 +1,33 @@
-# version: "3.9"
+version: "3.9"
 
 services:
-  env:
+  env1:
     build:
       context: .
       dockerfile: Dockerfile.env
-    container_name: agent_env
     ports:
-      - "8000:8000"
+      - "8001:8000"
+    restart: unless-stopped
     volumes:
       - logs:/app/logs
       - runs:/app/runs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 3s
 
+  env2:
+    build:
+      context: .
+      dockerfile: Dockerfile.env
+    ports:
+      - "8002:8000"
+    restart: unless-stopped
+    volumes:
+      - logs:/app/logs
+      - runs:/app/runs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
       interval: 5s
@@ -23,13 +39,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent
-    container_name: agent_runner
     depends_on:
-      - env
+      env1:
+        condition: service_healthy
+      env2:
+        condition: service_healthy
+    restart: unless-stopped
     environment:
-      - ENV_MODE=remote
-      - BASE_URL=http://env:8000/v1
-      - LOG_DIR=/app/logs/runs
+      ENV_MODE: remote
+      BASE_URLS: http://env1:8000/v1,http://env2:8000/v1
+      LOG_DIR: /app/logs/runs
+      VALIDATE_DETERMINISM: "true"
     volumes:
       - logs:/app/logs
       - runs:/app/runs

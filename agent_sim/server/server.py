@@ -1,33 +1,63 @@
 from flask import Flask, request, jsonify
+from uuid import uuid4
+import time
+from threading import Lock
+
 from agent_sim.environments.gridworld import GridWorld
 from agent_sim.replay.replay import ReplayLogger
+from agent_sim.protocol.env import validate_action, to_step
 
 app = Flask(__name__)
 
-env = GridWorld()
-logger = ReplayLogger()
-
 VALID_ACTIONS = ["up", "down", "left", "right"]
+MAX_STEPS = 100
+SESSION_TTL = 300  # seconds
+
+# -------------------- SESSION STORAGE --------------------
+
+sessions = {}
+sessions_lock = Lock()
+
+
+class Session:
+    def __init__(self):
+        self.env = GridWorld()
+        self.logger = ReplayLogger()
+        self.steps = 0
+        self.done = False
+        self.created_at = time.time()
+
 
 # -------------------- HEALTH --------------------
 
 @app.route("/v1/health", methods=["GET"])
 def health():
-    return jsonify({
-        "status": "ok"
-    }), 200
+    return jsonify({"status": "ok"}), 200
 
 
 # -------------------- RESET --------------------
 
 @app.route("/v1/reset", methods=["POST"])
 def reset():
-    state = env.reset()
+    session_id = str(uuid4())
+    session = Session()
 
-    logger.new_episode()
-    logger.log_step(state, action=None, reward=0, done=False)
+    # Reset environment
+    state = session.env.reset()
+
+    # Normalize initial state
+    state, _, _ = to_step(state, 0, False)
+
+    # Start replay log
+    session.logger.new_episode()
+    session.logger.log_step(state, action=None, reward=0, done=False)
+
+    # Store session safely
+    with sessions_lock:
+        sessions[session_id] = session
 
     return jsonify({
+        "session_id": session_id,
         "state": state
     })
 
@@ -41,65 +71,104 @@ def step():
     if not data or "action" not in data:
         return jsonify({"error": "Missing 'action'"}), 400
 
-    action = data["action"]
+    if "session_id" not in data:
+        return jsonify({"error": "Missing 'session_id'"}), 400
 
-    if action not in VALID_ACTIONS:
-        return jsonify({"error": "Invalid action"}), 400
+    session_id = data["session_id"]
 
-    state, reward, done = env.step(action)
+    # Retrieve session safely
+    with sessions_lock:
+        session = sessions.get(session_id)
 
-    logger.log_step(state, action, reward, done)
+    if not session:
+        return jsonify({"error": "Invalid session_id"}), 400
+
+    if session.done:
+        return jsonify({"error": "Episode already finished"}), 400
+
+    # Validate action
+    try:
+        action = validate_action(data["action"])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+    # Step environment
+    state, reward, done = session.env.step(action)
+
+    # Track steps
+    session.steps += 1
+    if session.steps >= MAX_STEPS:
+        done = True
+
+    session.done = done
+
+    # Normalize output
+    try:
+        state, reward, done = to_step(state, reward, done)
+    except Exception as e:
+        return jsonify({
+            "error": "protocol_violation",
+            "message": str(e)
+        }), 500
+
+    # Log replay
+    session.logger.log_step(state, action, reward, done)
 
     return jsonify({
+        "session_id": session_id,
         "state": state,
         "reward": reward,
         "done": done
     })
 
 
-# -------------------- METRICS (NEW) --------------------
+# -------------------- METRICS --------------------
 
 @app.route("/v1/metrics", methods=["GET"])
 def metrics():
-    """
-    Basic runtime metrics.
-    Assumes ReplayLogger stores episodes as a list of steps.
-    """
+    with sessions_lock:
+        total_sessions = len(sessions)
+        total_steps = sum(s.steps for s in sessions.values())
 
-    try:
-        episodes = getattr(logger, "episodes", [])
+        successes = sum(
+            1 for s in sessions.values()
+            if s.done
+            and hasattr(s.env, "state")
+            and hasattr(s.env, "goal")
+            and s.env.state["x"] == s.env.goal[0]
+            and s.env.state["y"] == s.env.goal[1]
+        )
 
-        total_episodes = len(episodes)
-        total_steps = sum(len(ep) for ep in episodes)
+    success_rate = (successes / total_sessions) if total_sessions > 0 else 0
 
-        successes = 0
-        total_reward = 0
+    return jsonify({
+        "sessions": total_sessions,
+        "steps": total_steps,
+        "success_rate": round(success_rate, 3)
+    })
 
-        for ep in episodes:
-            ep_reward = sum(step.get("reward", 0) for step in ep)
-            total_reward += ep_reward
 
-            if any(step.get("reward", 0) > 0 for step in ep):
-                successes += 1
+# -------------------- CLEANUP --------------------
 
-        success_rate = (successes / total_episodes) if total_episodes > 0 else 0
-        avg_reward = (total_reward / total_episodes) if total_episodes > 0 else 0
+def cleanup_sessions():
+    now = time.time()
 
-        return jsonify({
-            "episodes": total_episodes,
-            "steps": total_steps,
-            "success_rate": round(success_rate, 3),
-            "avg_reward": round(avg_reward, 3)
-        }), 200
+    with sessions_lock:
+        expired = [
+            sid for sid, s in sessions.items()
+            if now - s.created_at > SESSION_TTL
+        ]
 
-    except Exception as e:
-        return jsonify({
-            "error": "metrics_failed",
-            "message": str(e)
-        }), 500
+        for sid in expired:
+            sessions.pop(sid, None)
+
+
+@app.before_request
+def before_request():
+    cleanup_sessions()
 
 
 # -------------------- ENTRY --------------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+    app.run(host="0.0.0.0", port=8000, threaded=True)

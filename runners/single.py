@@ -9,13 +9,13 @@ from agent_sim.adapter.local_env import LocalEnv
 from agent_sim.adapter.remote_env import RemoteEnv
 from agent_sim.runner.manifest import RunManifest
 
-ACTIONS = ["up", "down", "left", "right"]
+# ✅ Use shared execution logic
+from runners.core import run_experiments
 
 # -------------------- CONFIG --------------------
 
 DEFAULT_BASE_URL = "http://localhost:8000/v1"
-REMOTE_TIMEOUT = 2  # seconds
-ENABLE_FALLBACK = True  # fallback to LocalEnv if remote fails
+REMOTE_TIMEOUT = 2
 
 ENV_RETRIES = int(os.environ.get("ENV_RETRIES", 10))
 ENV_RETRY_DELAY = float(os.environ.get("ENV_RETRY_DELAY", 1.0))
@@ -26,6 +26,7 @@ random.seed(SEED)
 ENABLE_PARITY = os.environ.get("ENABLE_PARITY", "true").lower() == "true"
 STRICT_MODE = os.environ.get("ENV_STRICT", "false").lower() == "true"
 CHAOS_MODE = os.environ.get("ENABLE_CHAOS", "false").lower() == "true"
+VERBOSE = os.environ.get("VERBOSE", "true").lower() == "true"
 
 # -------------------- ENV FACTORY --------------------
 
@@ -56,11 +57,11 @@ def create_env():
                     time.sleep(ENV_RETRY_DELAY)
 
         print("⚠️ Remote environment unavailable after retries")
-        if STRICT_MODE or not ENABLE_FALLBACK:
+        if STRICT_MODE:
             raise RuntimeError("❌ Remote env unreachable in strict mode")
-        else:
-            print("🔁 Falling back to LocalEnv")
-            return LocalEnv()
+
+        print("🔁 Falling back to LocalEnv")
+        return LocalEnv()
 
     print("⚡ Using LocalEnv")
     return LocalEnv()
@@ -75,6 +76,7 @@ class ParityEnv:
     def reset(self):
         s1 = self.env1.reset()
         s2 = self.env2.reset()
+        assert type(s1) == type(s2), f"Type mismatch: {type(s1)} != {type(s2)}"
         assert s1 == s2, f"Parity failure at reset: {s1} != {s2}"
         return s1
 
@@ -99,115 +101,38 @@ class ChaosEnv:
             raise RuntimeError("Chaos: step failure injected")
         return self.env.step(action)
 
-# -------------------- POLICIES --------------------
-
-def random_policy(state):
-    return random.choice(ACTIONS)
-
-def greedy_policy(state):
-    x, y = state["x"], state["y"]
-    if x < 4:
-        return "right"
-    elif y < 4:
-        return "down"
-    return random.choice(ACTIONS)
-
-# -------------------- CORE LOGIC --------------------
-
-def run_episode(env, policy=None, agent=None, max_steps=50):
-    state = env.reset()
-    total_reward = 0
-
-    for step in range(max_steps):
-        action = agent.select_action(state) if agent else policy(state)
-        next_state, reward, done = env.step(action)
-
-        if reward > 0:
-            print(f"🎯 GOAL REACHED at step {step}")
-
-        total_reward += reward
-
-        if agent:
-            agent.update(state, action, reward, next_state, done)
-
-        state = next_state
-        if done:
-            return total_reward, step + 1
-
-    return total_reward, max_steps
-
-
-def run_experiments(env, policy_name="random", num_episodes=50, max_steps=50, agent=None):
-    policy = random_policy
-
-    if policy_name == "greedy":
-        policy = greedy_policy
-        agent = None
-    elif policy_name == "q" and agent is None:
-        epsilon = float(os.environ.get("EPSILON", 0.3))
-        alpha = float(os.environ.get("ALPHA", 0.5))
-        print(f"🧠 QAgent config: alpha={alpha}, epsilon={epsilon}")
-        agent = QAgent(alpha=alpha, epsilon=epsilon)
-        policy = None
-
-    results = []
-    print(f"Running policy: {policy_name if policy_name != 'q' else 'q-learning'}")
-
-    for ep in range(num_episodes):
-        try:
-            total_reward, steps = run_episode(env, policy, agent, max_steps)
-        except Exception as e:
-            print(f"⚠️ Episode {ep+1} failed: {e}")
-            total_reward, steps = 0, 0
-
-        results.append((total_reward, steps))
-
-        if (ep + 1) % 10 == 0 or ep == 0:
-            print(f"Episode {ep + 1}: reward={total_reward}, steps={steps}")
-
-    successes = sum(1 for r, _ in results if r > 0)
-    avg_reward = sum(r for r, _ in results) / len(results)
-    avg_steps = sum(s for _, s in results) / len(results)
-
-    print("\n===== RUN SUMMARY =====")
-    print(f"Episodes: {num_episodes}")
-    print(f"Success Rate: {successes / num_episodes:.2f}")
-    print(f"Avg Reward: {avg_reward:.3f}")
-    print(f"Avg Steps: {avg_steps:.2f}")
-
-    return {
-        "episodes": num_episodes,
-        "success_rate": successes / num_episodes,
-        "avg_reward": avg_reward,
-        "avg_steps": avg_steps
-    }
-
-
-def train_then_greedy(env, train_episodes=200, eval_episodes=20, max_steps=50):
-    print("\n🟢 TRAINING PHASE (Q-learning)")
-    run_experiments(env, policy_name="q", num_episodes=train_episodes, max_steps=max_steps)
-
-    print("\n🔵 EVALUATION PHASE (Greedy)")
-    results = run_experiments(env, policy_name="greedy", num_episodes=eval_episodes, max_steps=max_steps)
-
-    return results
-
 # -------------------- ENTRY POINT --------------------
 
 if __name__ == "__main__":
-    remote_env = create_env()
 
+    # Create environment
+    base_env = create_env()
+
+    # Apply parity if enabled
     if ENABLE_PARITY:
-        env = ParityEnv(LocalEnv(), remote_env)
+        print("🔍 Parity mode enabled (Local vs Remote)")
+        env = ParityEnv(LocalEnv(), base_env)
     else:
-        env = remote_env
+        env = base_env
 
+    # Apply chaos if enabled
     if CHAOS_MODE:
+        print("🔥 Chaos mode enabled")
         env = ChaosEnv(env)
+
+    # -------------------- AGENT --------------------
+
+    alpha = float(os.environ.get("ALPHA", 0.5))
+    epsilon = float(os.environ.get("EPSILON", 0.3))
+
+    agent = QAgent(alpha=alpha, epsilon=epsilon)
+
+    print(f"🧠 QAgent config: alpha={alpha}, epsilon={epsilon}, seed={SEED}")
 
     # -------------------- MANIFEST --------------------
 
     config = {
+        "runner_type": "single",
         "env_mode": os.environ.get("ENV_MODE", "local"),
         "base_url": os.environ.get("BASE_URL", DEFAULT_BASE_URL),
         "train_episodes": int(os.environ.get("TRAIN_EPISODES", 200)),
@@ -217,25 +142,39 @@ if __name__ == "__main__":
         "parity": ENABLE_PARITY,
         "chaos": CHAOS_MODE,
         "strict": STRICT_MODE,
-        "agent": "q_agent"
+        "agent": "q_agent",
     }
 
     manifest = RunManifest(config)
 
-    # Co-locate replay logs
+    # Ensure logs + replay go into run directory
     os.environ["LOG_DIR"] = manifest.get_run_dir()
 
-    # Extra metadata
+    # Metadata
     manifest.add_field("hostname", socket.gethostname())
     manifest.add_field("timestamp_start", time.time())
+    manifest.add_field("git_commit", os.environ.get("GIT_COMMIT", "unknown"))
 
-    # -------------------- RUN --------------------
+    # -------------------- TRAIN --------------------
 
-    results = train_then_greedy(
+    print("\n🟢 TRAINING PHASE")
+    run_experiments(
         env,
-        train_episodes=config["train_episodes"],
-        eval_episodes=config["eval_episodes"],
-        max_steps=config["max_steps"]
+        agent=agent,
+        num_episodes=config["train_episodes"],
+        max_steps=config["max_steps"],
+        mode="train",
+    )
+
+    # -------------------- EVAL --------------------
+
+    print("\n🔵 EVALUATION PHASE (greedy)")
+    results = run_experiments(
+        env,
+        agent=agent,
+        num_episodes=config["eval_episodes"],
+        max_steps=config["max_steps"],
+        mode="eval",
     )
 
     # -------------------- FINALIZE --------------------
