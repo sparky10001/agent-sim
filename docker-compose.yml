@@ -46,6 +46,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     environment:
+      RUN_MODE: distributed
       ENV_MODE: remote
       BASE_URLS: http://env1:8000/v1,http://env2:8000/v1
       LOG_DIR: /app/logs/runs
