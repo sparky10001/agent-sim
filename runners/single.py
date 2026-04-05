@@ -6,13 +6,12 @@ import socket
 import time
 import requests
 
-from agents.q_agent import QAgent
 from agent_sim.adapter.local_env import LocalEnv
 from agent_sim.adapter.remote_env import RemoteEnv
 from agent_sim.runner.manifest import RunManifest
 
 # Shared execution logic
-from runners.core import run_experiments
+from runners.core import run_experiments, QAgent
 
 # -------------------- CONFIG --------------------
 
