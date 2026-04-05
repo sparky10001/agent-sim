@@ -12,7 +12,7 @@ class GridWorld:
         self.state = {
             "x": 0,
             "y": 0,
-            "goal": self.goal
+            "goal": list(self.goal)  # JSON-safe
         }
         return self.state
 
@@ -24,19 +24,38 @@ class GridWorld:
         """
         x, y = self.state["x"], self.state["y"]
 
-        if action == "up" and y > 0:
-            y -= 1
-        elif action == "down" and y < self.height - 1:
-            y += 1
-        elif action == "left" and x > 0:
-            x -= 1
-        elif action == "right" and x < self.width - 1:
-            x += 1
+        # Calculate candidate move
+        new_x, new_y = x, y
+        if action == "up":
+            new_y -= 1
+        elif action == "down":
+            new_y += 1
+        elif action == "left":
+            new_x -= 1
+        elif action == "right":
+            new_x += 1
 
-        self.state["x"], self.state["y"] = x, y
+        # Clamp to grid bounds
+        new_x = max(0, min(new_x, self.width - 1))
+        new_y = max(0, min(new_y, self.height - 1))
 
-        # Simple reward: +1 for reaching goal, 0 otherwise
-        done = (x, y) == self.goal
-        reward = 1 if done else 0
+        # Check if moved
+        moved = (new_x != x) or (new_y != y)
+
+        # Update state
+        self.state = {
+            "x": new_x,
+            "y": new_y,
+            "goal": list(self.goal)
+        }
+
+        # Reward / done
+        done = (new_x, new_y) == self.goal
+        if done:
+            reward = 1.0
+        elif not moved:
+            reward = -0.1  # penalty for no-op
+        else:
+            reward = 0.0
 
         return self.state, reward, done
