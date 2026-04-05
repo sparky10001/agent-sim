@@ -1,3 +1,5 @@
+# runners/single.py
+
 import os
 import random
 import socket
@@ -9,7 +11,7 @@ from agent_sim.adapter.local_env import LocalEnv
 from agent_sim.adapter.remote_env import RemoteEnv
 from agent_sim.runner.manifest import RunManifest
 
-# ✅ Use shared execution logic
+# Shared execution logic
 from runners.core import run_experiments
 
 # -------------------- CONFIG --------------------
@@ -19,7 +21,6 @@ REMOTE_TIMEOUT = 2
 
 ENV_RETRIES = int(os.environ.get("ENV_RETRIES", 10))
 ENV_RETRY_DELAY = float(os.environ.get("ENV_RETRY_DELAY", 1.0))
-
 SEED = int(os.environ.get("SEED", 42))
 random.seed(SEED)
 
@@ -66,6 +67,7 @@ def create_env():
     print("⚡ Using LocalEnv")
     return LocalEnv()
 
+
 # -------------------- PARITY / CHAOS --------------------
 
 class ParityEnv:
@@ -86,6 +88,7 @@ class ParityEnv:
         assert r1 == r2, f"Parity failure at step: {r1} != {r2}"
         return r1
 
+
 class ChaosEnv:
     def __init__(self, env, failure_rate=0.05):
         self.env = env
@@ -101,10 +104,25 @@ class ChaosEnv:
             raise RuntimeError("Chaos: step failure injected")
         return self.env.step(action)
 
-# -------------------- ENTRY POINT --------------------
+
+# -------------------- TRAIN THEN GREEDY --------------------
+
+def train_then_greedy(env, agent, train_episodes=200, eval_episodes=20, max_steps=50):
+    """
+    Backward-compatible wrapper: train agent, then evaluate greedily.
+    """
+    print("\n🟢 TRAINING PHASE (Q-learning)")
+    run_experiments(env, agent=agent, num_episodes=train_episodes, max_steps=max_steps, mode="train")
+
+    print("\n🔵 EVALUATION PHASE (greedy)")
+    results = run_experiments(env, agent=agent, num_episodes=eval_episodes, max_steps=max_steps, mode="eval")
+
+    return results
+
+
+# -------------------- MAIN ENTRY --------------------
 
 if __name__ == "__main__":
-
     # Create environment
     base_env = create_env()
 
@@ -126,7 +144,6 @@ if __name__ == "__main__":
     epsilon = float(os.environ.get("EPSILON", 0.3))
 
     agent = QAgent(alpha=alpha, epsilon=epsilon)
-
     print(f"🧠 QAgent config: alpha={alpha}, epsilon={epsilon}, seed={SEED}")
 
     # -------------------- MANIFEST --------------------
@@ -146,38 +163,20 @@ if __name__ == "__main__":
     }
 
     manifest = RunManifest(config)
-
-    # Ensure logs + replay go into run directory
     os.environ["LOG_DIR"] = manifest.get_run_dir()
-
-    # Metadata
     manifest.add_field("hostname", socket.gethostname())
     manifest.add_field("timestamp_start", time.time())
     manifest.add_field("git_commit", os.environ.get("GIT_COMMIT", "unknown"))
 
-    # -------------------- TRAIN --------------------
+    # -------------------- RUN --------------------
 
-    print("\n🟢 TRAINING PHASE")
-    run_experiments(
+    results = train_then_greedy(
         env,
-        agent=agent,
-        num_episodes=config["train_episodes"],
-        max_steps=config["max_steps"],
-        mode="train",
+        agent,
+        train_episodes=config["train_episodes"],
+        eval_episodes=config["eval_episodes"],
+        max_steps=config["max_steps"]
     )
-
-    # -------------------- EVAL --------------------
-
-    print("\n🔵 EVALUATION PHASE (greedy)")
-    results = run_experiments(
-        env,
-        agent=agent,
-        num_episodes=config["eval_episodes"],
-        max_steps=config["max_steps"],
-        mode="eval",
-    )
-
-    # -------------------- FINALIZE --------------------
 
     manifest.update_results(results)
     manifest.add_field("timestamp_end", time.time())
